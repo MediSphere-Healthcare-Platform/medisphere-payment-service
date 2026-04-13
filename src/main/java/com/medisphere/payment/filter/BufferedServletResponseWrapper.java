@@ -17,7 +17,7 @@ public class BufferedServletResponseWrapper extends HttpServletResponseWrapper {
 
     private final ByteArrayOutputStream baos = new ByteArrayOutputStream();
     private PrintWriter writer;
-    private int status = 200;
+    private int status = 200; // Default status is 200 OK
 
     public BufferedServletResponseWrapper(HttpServletResponse response) {
         super(response);

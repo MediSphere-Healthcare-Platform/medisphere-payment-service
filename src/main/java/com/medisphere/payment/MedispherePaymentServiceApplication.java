@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Bean;
 
 @SpringBootApplication
 @EnableDiscoveryClient
+@org.springframework.cloud.openfeign.EnableFeignClients
 public class MedispherePaymentServiceApplication {
 
 	public static void main(String[] args) {

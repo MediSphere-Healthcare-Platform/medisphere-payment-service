@@ -24,12 +24,17 @@ public class MDCFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
         try {
+            // Generate a unique Request ID for this specific request
             String requestId = UUID.randomUUID().toString();
+
+            // Put values into MDC (Mapped Diagnostic Context)
+            // These can then be included in any log message automatically
             MDC.put("REQ_ID", requestId);
-            MDC.put("NAME", applicationName != null ? applicationName.toUpperCase() : "PAYMENT-SERVICE");
+            MDC.put("NAME", applicationName != null ? applicationName.toUpperCase() : "UNKNOWN");
 
             filterChain.doFilter(request, response);
         } finally {
+            // Important: Clear MDC values after the request is finished
             MDC.clear();
         }
     }

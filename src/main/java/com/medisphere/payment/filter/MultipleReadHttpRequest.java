@@ -9,7 +9,7 @@ import java.io.*;
 
 public class MultipleReadHttpRequest extends HttpServletRequestWrapper {
 
-    private final byte[] requestBody;
+    private byte[] requestBody;
 
     public MultipleReadHttpRequest(HttpServletRequest request) throws IOException {
         super(request);
@@ -18,11 +18,11 @@ public class MultipleReadHttpRequest extends HttpServletRequestWrapper {
 
     @Override
     public ServletInputStream getInputStream() {
-        final ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(requestBody);
+        final ByteArrayInputStream bais = new ByteArrayInputStream(requestBody);
         return new ServletInputStream() {
             @Override
             public boolean isFinished() {
-                return byteArrayInputStream.available() == 0;
+                return bais.available() == 0;
             }
 
             @Override
@@ -36,13 +36,13 @@ public class MultipleReadHttpRequest extends HttpServletRequestWrapper {
 
             @Override
             public int read() {
-                return byteArrayInputStream.read();
+                return bais.read();
             }
         };
     }
 
     @Override
     public BufferedReader getReader() {
-        return new BufferedReader(new InputStreamReader(getInputStream()));
+        return new BufferedReader(new InputStreamReader(this.getInputStream()));
     }
 }
