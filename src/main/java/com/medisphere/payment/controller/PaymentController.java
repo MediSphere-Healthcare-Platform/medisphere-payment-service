@@ -60,4 +60,10 @@ public class PaymentController {
 
         return ResponseEntity.ok(response);
     }
+
+    @GetMapping(value = EndPoint.PAYMENT_HISTORY, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Object> getPaymentHistory() {
+        log.info("Received request to get payment history");
+        return paymentService.getPaymentHistory();
+    }
 }

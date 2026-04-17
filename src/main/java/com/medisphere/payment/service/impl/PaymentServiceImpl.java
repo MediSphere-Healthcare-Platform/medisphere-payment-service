@@ -1,8 +1,13 @@
 package com.medisphere.payment.service.impl;
 
 import com.medisphere.payment.client.MedisphereAppointmentClient;
+import com.medisphere.payment.client.MedisphereAppointmentClient;
+import com.medisphere.payment.client.MedisphereAuthClient;
+import com.medisphere.payment.client.MedisphereNotificationClient;
 import com.medisphere.payment.client.MedispherePatientClient;
 import com.medisphere.payment.client.request.AppointmentStatusChangeClientRequest;
+import com.medisphere.payment.client.request.NotificationClientRequest;
+import com.medisphere.payment.client.response.AuthApiClientResponse;
 import com.medisphere.payment.domain.InitiatePaymentRequest;
 import com.medisphere.payment.domain.PaymentNotifyRequest;
 import com.medisphere.payment.dto.response.PayHereDetailsResponse;
@@ -30,6 +35,7 @@ import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -41,6 +47,8 @@ public class PaymentServiceImpl implements PaymentService {
     private final ResponseGenerator responseGenerator;
     private final MedispherePatientClient medispherePatientClient;
     private final MedisphereAppointmentClient medisphereAppointmentClient;
+    private final MedisphereAuthClient medisphereAuthClient;
+    private final MedisphereNotificationClient medisphereNotificationClient;
     private final CommonUrlRepository commonUrlRepository;
 
     @Value("${payhere.merchant.id}")
@@ -95,6 +103,18 @@ public class PaymentServiceImpl implements PaymentService {
                     .map(CommonUrlEntity::getUrl)
                     .orElse("https://medisphere.requestcatcher.com");
 
+            // Fetch email from Auth Service using msUserId
+            String patientEmail = null;
+            if (request.getMsUserId() != null) {
+                ResponseEntity<AuthApiClientResponse<String>> authResponse = medisphereAuthClient.getEmailByMsUserId(request.getMsUserId());
+                if (authResponse.getBody() != null && authResponse.getBody().getData() != null) {
+                    patientEmail = authResponse.getBody().getData();
+                }
+            }
+            if (patientEmail == null) {
+                patientEmail = patientData.getEmail(); // Fallback if auth service fails or msUserId is missing
+            }
+
             PayHereDetailsResponse response = PayHereDetailsResponse.builder()
                     .merchant_id(MERCHANT_ID)
                     .paymentRefId(paymentReferenceId)
@@ -104,7 +124,7 @@ public class PaymentServiceImpl implements PaymentService {
                     .hash(hash)
                     .first_name(patientData.getFirstName())
                     .last_name(patientData.getLastName())
-                    .email(patientData.getEmail()) // TODO: inform dasun
+                    .email(patientEmail)
                     .phone(patientData.getPhoneNumber())
                     .address(patientData.getAddress())
                     .return_url(frontendBaseUrl + "/payment-success")
@@ -161,9 +181,29 @@ public class PaymentServiceImpl implements PaymentService {
                         .status(Status.PAID.name())
                         .build();
 
-                // Update Appointment Status to PAID
+                //Update Appointment Status to PAID
                 medisphereAppointmentClient.updateAppointmentStatus(appointmentStatusChangeClientRequest);
-                log.debug("Payment SUCCESS handled for Reference: {}", request.getPaymentRefId());
+
+                // Send Success Email Notification
+                log.info("Sending payment success email for appointment: {}", paymentEntity.getAppointmentReferenceId());
+                NotificationClientRequest notificationReq = NotificationClientRequest.builder()
+                        .userId(paymentEntity.getMsUserId())
+                        .userRole("PATIENT")
+                        .title("Payment Successful")
+                        .message("Your payment for appointment (" + paymentEntity.getAppointmentReferenceId() + ") was successful. Your appointment status is now PAID.")
+                        .channel("EMAIL")
+                        .relatedId(paymentEntity.getAppointmentReferenceId())
+                        .isBroadcast(false)
+                        .build();
+
+                try {
+                    medisphereNotificationClient.createNotification(notificationReq);
+                    log.info("Successfully sent payment confirmation email for reference: {}", paymentEntity.getAppointmentReferenceId());
+                } catch (Exception e) {
+                    log.error("Failed to send payment confirmation email: ", e);
+                }
+
+                log.info("Payment success update handled for reference: {}", request.getPaymentRefId());
             } else {
                 paymentEntity.setStatus(Status.Failed.name());
                 log.warn("Payment FAILED handled for Reference: {}. Status: {}", request.getPaymentRefId(),
@@ -210,6 +250,20 @@ public class PaymentServiceImpl implements PaymentService {
             return sb.toString();
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("MD5 Algorithm not found", e);
+        }
+    }
+
+    @Override
+    public ResponseEntity<Object> getPaymentHistory() {
+        try {
+            log.debug("Fetching payment history");
+            List<MedispherePaymentEntity> payments = paymentRepository.findAll();
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_SUCCESS,
+                    MessageConstant.PAYMENT_OPERATION_SUCCESS, payments);
+        } catch (Exception e) {
+            log.error("Error fetching payment history: ", e);
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED,
+                    MessageConstant.PAYMENT_OPERATION_FAILED, null);
         }
     }
 }

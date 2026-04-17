@@ -8,4 +8,6 @@ public interface PaymentService {
     ResponseEntity<Object> initiatePayment(InitiatePaymentRequest request);
 
     ResponseEntity<Object> handleNotify(PaymentNotifyRequest request);
+
+    ResponseEntity<Object> getPaymentHistory();
 }
