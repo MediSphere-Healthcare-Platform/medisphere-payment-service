@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 @FeignClient(name = "medisphere-notification-service", fallbackFactory = MedisphereNotificationClientFallbackFactory.class)
 public interface MedisphereNotificationClient {
 
-    @PostMapping("/api/v1/notifications")
+    @PostMapping("/api/v1/notifications/create")
     ResponseEntity<Object> createNotification(@RequestBody NotificationClientRequest notificationClientRequest);
 }
 
