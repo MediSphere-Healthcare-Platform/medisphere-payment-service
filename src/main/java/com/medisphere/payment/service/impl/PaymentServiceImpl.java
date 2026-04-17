@@ -6,7 +6,9 @@ import com.medisphere.payment.client.request.AppointmentStatusChangeClientReques
 import com.medisphere.payment.domain.InitiatePaymentRequest;
 import com.medisphere.payment.domain.PaymentNotifyRequest;
 import com.medisphere.payment.dto.response.PayHereDetailsResponse;
+import com.medisphere.payment.entity.CommonUrlEntity;
 import com.medisphere.payment.entity.MedispherePaymentEntity;
+import com.medisphere.payment.repository.CommonUrlRepository;
 import com.medisphere.payment.repository.PaymentRepository;
 import com.medisphere.payment.service.PaymentService;
 import com.medisphere.payment.service.ResponseGenerator;
@@ -39,6 +41,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final ResponseGenerator responseGenerator;
     private final MedispherePatientClient medispherePatientClient;
     private final MedisphereAppointmentClient medisphereAppointmentClient;
+    private final CommonUrlRepository commonUrlRepository;
 
     @Value("${payhere.merchant.id}")
     private String MERCHANT_ID;
@@ -50,14 +53,18 @@ public class PaymentServiceImpl implements PaymentService {
     @Transactional
     public ResponseEntity<Object> initiatePayment(InitiatePaymentRequest request) {
         try {
-            log.debug("Initiate new transaction before the user is redirected to the payment gateway, for Appointment: {}", request.getAppointmentReferenceId());
+            log.debug(
+                    "Initiate new transaction before the user is redirected to the payment gateway, for Appointment: {}",
+                    request.getAppointmentReferenceId());
 
-            //Validate Patient
-            ResponseEntity<PatientByIdClientResponse> patientByIdClientResponse = medispherePatientClient.getPatientById(request.getPatientId());
+            // Validate Patient
+            ResponseEntity<PatientByIdClientResponse> patientByIdClientResponse = medispherePatientClient
+                    .getPatientById(request.getPatientId());
             log.debug("Patient service response: {}", Utility.objectToJson(patientByIdClientResponse));
             if (patientByIdClientResponse.getBody() == null || patientByIdClientResponse.getBody().getData() == null) {
                 log.warn("Patient not found: {}", request.getPatientId());
-                return responseGenerator.generateResponse(ResponseCode.PATIENT_NOT_FOUND, MessageConstant.PATIENT_NOT_FOUND, null);
+                return responseGenerator.generateResponse(ResponseCode.PATIENT_NOT_FOUND,
+                        MessageConstant.PATIENT_NOT_FOUND, null);
             }
             PatientClientResponse patientData = patientByIdClientResponse.getBody().getData();
             log.debug("Patient data: {}", patientData);
@@ -75,9 +82,18 @@ public class PaymentServiceImpl implements PaymentService {
 
             paymentRepository.save(paymentEntity);
 
-            //Generate PayHere Hash
+            // Generate PayHere Hash
             String formattedAmount = new BigDecimal(request.getAmount()).setScale(2, RoundingMode.HALF_UP).toString();
             String hash = generatePayHereHash(MERCHANT_ID, paymentReferenceId, formattedAmount, request.getCurrency());
+
+            // Fetch URLs dynamically
+            String frontendBaseUrl = commonUrlRepository.findByCode("FRONTEND_BASE_URL")
+                    .map(CommonUrlEntity::getUrl)
+                    .orElse("http://localhost:3000");
+
+            String apiBaseUrl = commonUrlRepository.findByCode("API_BASE_URL")
+                    .map(CommonUrlEntity::getUrl)
+                    .orElse("https://medisphere.requestcatcher.com");
 
             PayHereDetailsResponse response = PayHereDetailsResponse.builder()
                     .merchant_id(MERCHANT_ID)
@@ -88,20 +104,22 @@ public class PaymentServiceImpl implements PaymentService {
                     .hash(hash)
                     .first_name(patientData.getFirstName())
                     .last_name(patientData.getLastName())
-                    .email(patientData.getEmail()) //TODO: inform dasun
+                    .email(patientData.getEmail()) // TODO: inform dasun
                     .phone(patientData.getPhoneNumber())
                     .address(patientData.getAddress())
-                    .return_url("http://localhost:3000/payment-success")
-                    .cancel_url("http://localhost:3000/payment-cancel")
-                    .notify_url("https://medisphere.requestcatcher.com/test")
+                    .return_url(frontendBaseUrl + "/payment-success")
+                    .cancel_url(frontendBaseUrl + "/payment-cancel")
+                    .notify_url(apiBaseUrl + "/payment/api/v1/payment/notify")
                     .build();
 
             log.info("Payment initiated successfully: {}", paymentReferenceId);
-            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_SUCCESS, MessageConstant.PAYMENT_OPERATION_SUCCESS, response);
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_SUCCESS,
+                    MessageConstant.PAYMENT_OPERATION_SUCCESS, response);
 
-        }catch (Exception e) {
+        } catch (Exception e) {
             log.error("Error initiated payment: ", e);
-            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED, MessageConstant.PAYMENT_OPERATION_FAILED, null);
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED,
+                    MessageConstant.PAYMENT_OPERATION_FAILED, null);
         }
     }
 
@@ -109,21 +127,26 @@ public class PaymentServiceImpl implements PaymentService {
     @Transactional
     public ResponseEntity<Object> handleNotify(PaymentNotifyRequest request) {
         try {
-            log.debug("Webhook called asynchronously by PayHere to confirm if the payment was actually successful, Called for Order: {}", request.getPaymentRefId());
+            log.debug(
+                    "Webhook called asynchronously by PayHere to confirm if the payment was actually successful, Called for Order: {}",
+                    request.getPaymentRefId());
 
-            //Verify Signature
+            // Verify Signature
             String localHash = generateNotifyHash(request);
             if (!localHash.equalsIgnoreCase(request.getMd5sig())) {
                 log.warn("Invalid MD5 Signature received for Order: {}. Local: {}, Received: {}",
                         request.getPaymentRefId(), localHash, request.getMd5sig());
-                return responseGenerator.generateResponse(ResponseCode.INVALID_SIGNATURE, MessageConstant.INVALID_SIGNATURE, null);
+                return responseGenerator.generateResponse(ResponseCode.INVALID_SIGNATURE,
+                        MessageConstant.INVALID_SIGNATURE, null);
             }
 
-            //Update Internal Record
-            MedispherePaymentEntity paymentEntity = paymentRepository.findByPaymentReferenceId(request.getPaymentRefId());
-            if(paymentEntity == null) {
+            // Update Internal Record
+            MedispherePaymentEntity paymentEntity = paymentRepository
+                    .findByPaymentReferenceId(request.getPaymentRefId());
+            if (paymentEntity == null) {
                 log.warn("Payment not found: {}", request.getPaymentRefId());
-                return responseGenerator.generateResponse(ResponseCode.PAYMENT_RECORD_NOT_FOUND, MessageConstant.PAYMENT_RECORD_NOT_FOUND, null);
+                return responseGenerator.generateResponse(ResponseCode.PAYMENT_RECORD_NOT_FOUND,
+                        MessageConstant.PAYMENT_RECORD_NOT_FOUND, null);
             }
 
             if ("2".equals(request.getStatus_code())) {
@@ -132,25 +155,29 @@ public class PaymentServiceImpl implements PaymentService {
                 paymentEntity.setPayhereAmount(request.getPayhere_amount());
                 paymentEntity.setPaymentMethod(request.getMethod());
 
-                AppointmentStatusChangeClientRequest appointmentStatusChangeClientRequest = AppointmentStatusChangeClientRequest.builder()
+                AppointmentStatusChangeClientRequest appointmentStatusChangeClientRequest = AppointmentStatusChangeClientRequest
+                        .builder()
                         .appointmentReferenceId(paymentEntity.getAppointmentReferenceId())
                         .status(Status.PAID.name())
                         .build();
 
-                //Update Appointment Status to PAID
+                // Update Appointment Status to PAID
                 medisphereAppointmentClient.updateAppointmentStatus(appointmentStatusChangeClientRequest);
                 log.debug("Payment SUCCESS handled for Reference: {}", request.getPaymentRefId());
             } else {
                 paymentEntity.setStatus(Status.Failed.name());
-                log.warn("Payment FAILED handled for Reference: {}. Status: {}", request.getPaymentRefId(), request.getStatus_code());
+                log.warn("Payment FAILED handled for Reference: {}. Status: {}", request.getPaymentRefId(),
+                        request.getStatus_code());
             }
 
             paymentRepository.save(paymentEntity);
-            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_SUCCESS, MessageConstant.PAYMENT_OPERATION_SUCCESS, null);
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_SUCCESS,
+                    MessageConstant.PAYMENT_OPERATION_SUCCESS, null);
 
         } catch (Exception e) {
             log.error("Error handling notify: ", e);
-            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED, MessageConstant.PAYMENT_OPERATION_FAILED, null);
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED,
+                    MessageConstant.PAYMENT_OPERATION_FAILED, null);
         }
     }
 
