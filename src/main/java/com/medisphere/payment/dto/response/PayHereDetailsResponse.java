@@ -7,7 +7,7 @@ import lombok.Data;
 @Builder
 public class PayHereDetailsResponse {
     private String merchant_id;
-    private String paymentRefId;
+    private String order_id;
     private String items;
     private String currency;
     private String amount;

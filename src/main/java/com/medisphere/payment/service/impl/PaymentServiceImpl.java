@@ -1,7 +1,6 @@
 package com.medisphere.payment.service.impl;
 
 import com.medisphere.payment.client.MedisphereAppointmentClient;
-import com.medisphere.payment.client.MedisphereAppointmentClient;
 import com.medisphere.payment.client.MedisphereAuthClient;
 import com.medisphere.payment.client.MedisphereNotificationClient;
 import com.medisphere.payment.client.MedispherePatientClient;
@@ -14,10 +13,12 @@ import com.medisphere.payment.dto.response.PayHereDetailsResponse;
 import com.medisphere.payment.entity.CommonUrlEntity;
 import com.medisphere.payment.entity.MedispherePaymentEntity;
 import com.medisphere.payment.repository.CommonUrlRepository;
+import com.medisphere.payment.repository.MediSphereDoctorChargesRepository;
 import com.medisphere.payment.repository.PaymentRepository;
 import com.medisphere.payment.service.PaymentService;
 import com.medisphere.payment.service.ResponseGenerator;
 import com.medisphere.payment.util.MessageConstant;
+import com.medisphere.payment.util.PayHereHasherUtil;
 import com.medisphere.payment.util.ResponseCode;
 import com.medisphere.payment.util.Utility;
 import com.medisphere.payment.util.enums.Status;
@@ -32,9 +33,7 @@ import com.medisphere.payment.client.response.PatientClientResponse;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.text.DecimalFormat;
 import java.util.List;
 import java.util.UUID;
 
@@ -49,13 +48,12 @@ public class PaymentServiceImpl implements PaymentService {
     private final MedisphereAppointmentClient medisphereAppointmentClient;
     private final MedisphereAuthClient medisphereAuthClient;
     private final MedisphereNotificationClient medisphereNotificationClient;
+    private final MediSphereDoctorChargesRepository doctorChargesRepository;
     private final CommonUrlRepository commonUrlRepository;
+    private final PayHereHasherUtil payHereHasherUtil;
 
     @Value("${payhere.merchant.id}")
     private String MERCHANT_ID;
-
-    @Value("${payhere.merchant.secret}")
-    private String MERCHANT_SECRET;
 
     @Override
     @Transactional
@@ -90,9 +88,13 @@ public class PaymentServiceImpl implements PaymentService {
 
             paymentRepository.save(paymentEntity);
 
-            // Generate PayHere Hash
-            String formattedAmount = new BigDecimal(request.getAmount()).setScale(2, RoundingMode.HALF_UP).toString();
-            String hash = generatePayHereHash(MERCHANT_ID, paymentReferenceId, formattedAmount, request.getCurrency());
+            String formattedAmount = new BigDecimal(request.getAmount())
+                    .setScale(2, RoundingMode.HALF_UP)
+                    .toPlainString();
+
+            String currency = request.getCurrency().toUpperCase();
+
+            String hash = payHereHasherUtil.generateCheckoutHash(paymentReferenceId, formattedAmount, currency);
 
             // Fetch URLs dynamically
             String frontendBaseUrl = commonUrlRepository.findByCode("FRONTEND_BASE_URL")
@@ -116,17 +118,17 @@ public class PaymentServiceImpl implements PaymentService {
             }
 
             PayHereDetailsResponse response = PayHereDetailsResponse.builder()
-                    .merchant_id(MERCHANT_ID)
-                    .paymentRefId(paymentReferenceId)
+                    .merchant_id(MERCHANT_ID.trim())
+                    .order_id(paymentReferenceId.trim())
                     .items("Medical Appointment Fee")
-                    .currency(request.getCurrency())
+                    .currency(currency)
                     .amount(formattedAmount)
                     .hash(hash)
                     .first_name(patientData.getFirstName())
                     .last_name(patientData.getLastName())
                     .email(patientEmail)
                     .phone(patientData.getPhoneNumber())
-                    .address(patientData.getAddress())
+                    .address(patientData.getAddress() != null ? patientData.getAddress() : "N/A")
                     .return_url(frontendBaseUrl + "/payment-success")
                     .cancel_url(frontendBaseUrl + "/payment-cancel")
                     .notify_url(apiBaseUrl + "/payment/api/v1/payment/notify")
@@ -149,22 +151,30 @@ public class PaymentServiceImpl implements PaymentService {
         try {
             log.debug(
                     "Webhook called asynchronously by PayHere to confirm if the payment was actually successful, Called for Order: {}",
-                    request.getPaymentRefId());
+                    request.getOrder_id());
 
             // Verify Signature
-            String localHash = generateNotifyHash(request);
+            DecimalFormat df = new DecimalFormat("0.00");
+            String formattedAmount = df.format(new BigDecimal(request.getPayhere_amount()));
+            String localHash = payHereHasherUtil.generateNotifyHash(
+                    request.getOrder_id(),
+                    formattedAmount,
+                    request.getPayhere_currency(),
+                    request.getStatus_code()
+            );
+
             if (!localHash.equalsIgnoreCase(request.getMd5sig())) {
                 log.warn("Invalid MD5 Signature received for Order: {}. Local: {}, Received: {}",
-                        request.getPaymentRefId(), localHash, request.getMd5sig());
+                        request.getOrder_id(), localHash, request.getMd5sig());
                 return responseGenerator.generateResponse(ResponseCode.INVALID_SIGNATURE,
                         MessageConstant.INVALID_SIGNATURE, null);
             }
 
             // Update Internal Record
             MedispherePaymentEntity paymentEntity = paymentRepository
-                    .findByPaymentReferenceId(request.getPaymentRefId());
+                    .findByPaymentReferenceId(request.getOrder_id());
             if (paymentEntity == null) {
-                log.warn("Payment not found: {}", request.getPaymentRefId());
+                log.warn("Payment not found: {}", request.getOrder_id());
                 return responseGenerator.generateResponse(ResponseCode.PAYMENT_RECORD_NOT_FOUND,
                         MessageConstant.PAYMENT_RECORD_NOT_FOUND, null);
             }
@@ -189,8 +199,10 @@ public class PaymentServiceImpl implements PaymentService {
                 NotificationClientRequest notificationReq = NotificationClientRequest.builder()
                         .userId(paymentEntity.getMsUserId())
                         .userRole("PATIENT")
-                        .title("Payment Successful")
-                        .message("Your payment for appointment (" + paymentEntity.getAppointmentReferenceId() + ") was successful. Your appointment status is now PAID.")
+                        .title("Payment Confirmed - MediSphere")
+                        .message("Dear Patient, your payment of " + paymentEntity.getCurrency() + " " + paymentEntity.getAmount() + 
+                                 " for appointment " + paymentEntity.getAppointmentReferenceId() + " has been successfully processed. " +
+                                 "Your appointment is now confirmed and marked as PAID. Thank you for choosing MediSphere.")
                         .channel("EMAIL")
                         .relatedId(paymentEntity.getAppointmentReferenceId())
                         .isBroadcast(false)
@@ -203,10 +215,10 @@ public class PaymentServiceImpl implements PaymentService {
                     log.error("Failed to send payment confirmation email: ", e);
                 }
 
-                log.info("Payment success update handled for reference: {}", request.getPaymentRefId());
+                log.info("Payment success update handled for reference: {}", request.getOrder_id());
             } else {
                 paymentEntity.setStatus(Status.Failed.name());
-                log.warn("Payment FAILED handled for Reference: {}. Status: {}", request.getPaymentRefId(),
+                log.warn("Payment FAILED handled for Reference: {}. Status: {}", request.getOrder_id(),
                         request.getStatus_code());
             }
 
@@ -218,38 +230,6 @@ public class PaymentServiceImpl implements PaymentService {
             log.error("Error handling notify: ", e);
             return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED,
                     MessageConstant.PAYMENT_OPERATION_FAILED, null);
-        }
-    }
-
-    private String generatePayHereHash(String merchantId, String orderId, String amount, String currency) {
-        String secretHash = md5Java(MERCHANT_SECRET).toUpperCase();
-        String mainString = merchantId + orderId + amount + currency + secretHash;
-        return md5Java(mainString).toUpperCase();
-    }
-
-    private String generateNotifyHash(PaymentNotifyRequest request) {
-        String secretHash = md5Java(MERCHANT_SECRET).toUpperCase();
-        String mainString = request.getMerchant_id() +
-                request.getPaymentRefId() +
-                request.getPayhere_amount() +
-                request.getPayhere_currency() +
-                request.getStatus_code() +
-                secretHash;
-        return md5Java(mainString).toUpperCase();
-    }
-
-    private String md5Java(String message) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] hashInBytes = md.digest(message.getBytes(StandardCharsets.UTF_8));
-
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hashInBytes) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("MD5 Algorithm not found", e);
         }
     }
 
@@ -266,4 +246,82 @@ public class PaymentServiceImpl implements PaymentService {
                     MessageConstant.PAYMENT_OPERATION_FAILED, null);
         }
     }
+
+    @Override
+    public ResponseEntity<Object> getDoctorCharge(String doctorId) {
+        try {
+            log.info("Fetching charges for doctor: {}", doctorId);
+            return doctorChargesRepository.findByDoctorId(doctorId)
+                    .map(charge -> responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_SUCCESS,
+                            MessageConstant.PAYMENT_OPERATION_SUCCESS, charge))
+                    .orElseGet(() -> {
+                        log.warn("Charge not found for doctor: {}", doctorId);
+                        return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED,
+                                MessageConstant.DOCTOR_CHARGES_NOT_FOUND, null);
+                    });
+        } catch (Exception e) {
+            log.error("Error fetching doctor charges: ", e);
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED,
+                    MessageConstant.PAYMENT_OPERATION_FAILED, null);
+        }
+    }
+
+    @Override
+    public ResponseEntity<Object> getPaymentByOrderId(String orderId) {
+        try {
+            log.debug("Fetching payment details for Order: {}", orderId);
+            MedispherePaymentEntity payment = paymentRepository.findByPaymentReferenceId(orderId);
+            if (payment == null) {
+                return responseGenerator.generateResponse(ResponseCode.PAYMENT_RECORD_NOT_FOUND,
+                        MessageConstant.PAYMENT_RECORD_NOT_FOUND, null);
+            }
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_SUCCESS,
+                    MessageConstant.PAYMENT_OPERATION_SUCCESS, payment);
+        } catch (Exception e) {
+            log.error("Error fetching payment details: ", e);
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED,
+                    MessageConstant.PAYMENT_OPERATION_FAILED, null);
+        }
+    }
+
+    @Override
+    public ResponseEntity<Object> simulateLocalPaymentSuccess(String orderId) {
+        try {
+            log.info("Simulating local payment success for Order: {}", orderId);
+            MedispherePaymentEntity payment = paymentRepository.findByPaymentReferenceId(orderId);
+            if (payment == null) {
+                return responseGenerator.generateResponse(ResponseCode.PAYMENT_RECORD_NOT_FOUND,
+                        MessageConstant.PAYMENT_RECORD_NOT_FOUND, null);
+            }
+
+            // Ensure amount is formatted to 0.00 to match PayHere/Notify expectations
+            DecimalFormat df = new DecimalFormat("0.00");
+            String formattedAmount = df.format(new BigDecimal(payment.getAmount()));
+
+            String statusCode = "2"; // Success status for PayHere
+            String md5sig = payHereHasherUtil.generateNotifyHash(
+                    orderId,
+                    formattedAmount,
+                    payment.getCurrency(),
+                    statusCode
+            );
+
+            PaymentNotifyRequest notifyRequest = new PaymentNotifyRequest();
+            notifyRequest.setMerchant_id(MERCHANT_ID);
+            notifyRequest.setOrder_id(orderId);
+            notifyRequest.setPayhere_amount(formattedAmount);
+            notifyRequest.setPayhere_currency(payment.getCurrency());
+            notifyRequest.setStatus_code(statusCode);
+            notifyRequest.setMd5sig(md5sig);
+            notifyRequest.setPayhere_payment_id("SIM-" + orderId);
+            notifyRequest.setMethod("SIMULATED");
+
+            return handleNotify(notifyRequest);
+        } catch (Exception e) {
+            log.error("Error during simulation: ", e);
+            return responseGenerator.generateResponse(ResponseCode.PAYMENT_OPERATION_FAILED,
+                    MessageConstant.PAYMENT_OPERATION_FAILED, null);
+        }
+    }
+
 }

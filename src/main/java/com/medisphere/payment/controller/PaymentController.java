@@ -6,7 +6,6 @@ import com.medisphere.payment.domain.PaymentNotifyRequest;
 import com.medisphere.payment.dto.request.PaymentNotifyRequestDTO;
 import com.medisphere.payment.service.PaymentService;
 import com.medisphere.payment.util.EndPoint;
-import com.medisphere.payment.util.PayHereHasherUtil;
 import com.medisphere.payment.util.Utility;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
@@ -27,7 +26,6 @@ public class PaymentController {
 
     private final PaymentService paymentService;
     private final ModelMapper modelMapper;
-    private final PayHereHasherUtil payHereHasherUtil;
 
     @PostMapping(value = EndPoint.INITIATE_PAYMENT, consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Object> initiatePayment(@RequestBody InitiatePaymentRequestDTO requestDTO) {
@@ -41,29 +39,27 @@ public class PaymentController {
         return paymentService.handleNotify(modelMapper.map(requestDTO, PaymentNotifyRequest.class));
     }
 
-    @PostMapping(value = EndPoint.GENERATE_TEST_HASH, consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<Object> generateTestHash(@RequestBody PaymentNotifyRequestDTO requestDTO) {
-        log.info("Generating test hash for paymentRefId: {}, amount: {}, currency: {}, statusCode: {}", 
-                requestDTO.getPaymentRefId(), requestDTO.getPayhere_amount(), requestDTO.getPayhere_currency(), requestDTO.getStatus_code());
-        
-        String md5sig = payHereHasherUtil.generateHash(
-                requestDTO.getPaymentRefId(), 
-                requestDTO.getPayhere_amount(), 
-                requestDTO.getPayhere_currency(), 
-                requestDTO.getStatus_code()
-        );
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("paymentRefId", requestDTO.getPaymentRefId());
-        response.put("md5sig", md5sig);
-        response.put("instructions", "Copy this md5sig and use it in your next notify request JSON");
-
-        return ResponseEntity.ok(response);
+    @PostMapping(value = EndPoint.SIMULATE_SUCCESS, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Object> simulateSuccess(@PathVariable String orderId) {
+        log.info("Received request to simulate success for order: {}", orderId);
+        return paymentService.simulateLocalPaymentSuccess(orderId);
     }
 
     @GetMapping(value = EndPoint.PAYMENT_HISTORY, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Object> getPaymentHistory() {
         log.info("Received request to get payment history");
         return paymentService.getPaymentHistory();
+    }
+
+    @GetMapping(value = EndPoint.GET_DOCTOR_CHARGE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Object> getDoctorCharge(@PathVariable String doctorId) {
+        log.info("Received request to get charges for doctor: {}", doctorId);
+        return paymentService.getDoctorCharge(doctorId);
+    }
+
+    @GetMapping(value = EndPoint.GET_PAYMENT_BY_ID, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Object> getPaymentById(@PathVariable String orderId) {
+        log.info("Received request to get payment details for order: {}", orderId);
+        return paymentService.getPaymentByOrderId(orderId);
     }
 }

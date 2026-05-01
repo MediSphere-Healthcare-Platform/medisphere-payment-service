@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class PaymentNotifyRequestDTO {
     private String merchant_id;
-    private String paymentRefId;
+    private String order_id;
     private String payhere_payment_id;
     private String payhere_amount;
     private String payhere_currency;

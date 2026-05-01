@@ -24,7 +24,7 @@ spec:
         - name: SPRING_DATASOURCE_URL
           value: "jdbc:postgresql://ep-delicate-mountain-a1q5imc7-pooler.ap-southeast-1.aws.neon.tech:5432/payment_db?sslmode=require"
         - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
-          value: "http://eureka-server:8761/eureka/"
+          value: "http://service-registry:8761/eureka/"
 ---
 apiVersion: v1
 kind: Service
