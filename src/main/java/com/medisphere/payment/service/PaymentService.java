@@ -10,4 +10,10 @@ public interface PaymentService {
     ResponseEntity<Object> handleNotify(PaymentNotifyRequest request);
 
     ResponseEntity<Object> getPaymentHistory();
+
+    ResponseEntity<Object> getDoctorCharge(String doctorId);
+
+    ResponseEntity<Object> getPaymentByOrderId(String orderId);
+
+    ResponseEntity<Object> simulateLocalPaymentSuccess(String orderId);
 }

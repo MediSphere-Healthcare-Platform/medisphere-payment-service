@@ -7,4 +7,5 @@ public class MessageConstant {
     public static final String PATIENT_NOT_FOUND = "Patient not found.";
     public static final String PAYMENT_RECORD_NOT_FOUND = "Payment Record not found.";
     public static final String INVALID_SIGNATURE = "Invalid Signature.";
+    public static final String DOCTOR_CHARGES_NOT_FOUND = "Charge details not found for this doctor.";
 }
