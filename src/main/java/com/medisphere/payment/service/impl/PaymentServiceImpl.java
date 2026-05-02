@@ -192,7 +192,9 @@ public class PaymentServiceImpl implements PaymentService {
                         .build();
 
                 //Update Appointment Status to PAID
-                medisphereAppointmentClient.updateAppointmentStatus(appointmentStatusChangeClientRequest);
+                log.info("Attempting to update appointment status to PAID for reference: {}", paymentEntity.getAppointmentReferenceId());
+                ResponseEntity<Object> updateRes = medisphereAppointmentClient.updateAppointmentStatus(appointmentStatusChangeClientRequest);
+                log.info("Appointment status update response: {}", updateRes != null ? updateRes.getStatusCode() : "NULL");
 
                 // Send Success Email Notification
                 log.info("Sending payment success email for appointment: {}", paymentEntity.getAppointmentReferenceId());
